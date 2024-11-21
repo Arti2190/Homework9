@@ -1,0 +1,798 @@
+---
+title: "HW09withjustin"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+
+```{r}
+1 + 1
+```
+
+You can add options to executable code like this
+
+```{r}
+#| echo: false
+2 * 2
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).
+
+```{r}
+#install.packages("tree")
+#install.packages("rpart.plot")
+#install.packages("baguette")
+#install.packages("ranger")
+#install.packages("vip")
+#install.packages("parsnip")
+library(tidyverse)
+library(tidymodels)
+library(readr)
+library(lubridate)
+library(baguette)
+library(rpart.plot)
+library(rpart)
+library(tree)
+library(ranger)
+library("vip")
+library("parsnip")
+
+
+```
+
+```{r}
+bike_data <- read_csv("https://www4.stat.ncsu.edu/~online/datasets/SeoulBikeData.csv",local = locale(encoding = "latin1"))
+
+bike_data
+```
+
+```{r}
+ bike_data |> 
+  is.na() |> 
+  colSums()
+```
+
+```{r}
+attributes(bike_data)$spec
+```
+
+```{r}
+# Change date column 
+bike_data <- bike_data |>
+  mutate(date = dmy(Date)) |>
+  select(-Date)
+```
+
+```{r}
+summary(bike_data)
+```
+
+```{r}
+print(bike_data$Seasons |> 
+        unique())
+```
+
+```{r}
+bike_data$Holiday |>
+  unique()
+```
+
+```{r}
+bike_data$`Functioning Day` |>
+  unique()
+```
+
+### Turn it into factor to categorical data
+
+```{r}
+bike_data <- bike_data |>
+  mutate(seasons = factor(Seasons),
+         holiday = factor(Holiday),
+         fn_day = factor(`Functioning Day`)) |>
+  select(-Seasons, -Holiday, - `Functioning Day`)
+```
+
+```{r}
+bike_data <- bike_data |> rename('bike_count' = `Rented Bike Count`,
+         'hour' = "Hour",
+         "temp" = `Temperature(°C)`,
+         "wind_speed" = `Wind speed (m/s)`,
+         "humidity" = `Humidity(%)`,
+         "vis" = `Visibility (10m)`,
+         "dew_point_temp" = `Dew point temperature(°C)`,
+         "solar_radiation" = `Solar Radiation (MJ/m2)`,
+         "rainfall" = "Rainfall(mm)",
+         "snowfall" = `Snowfall (cm)`)
+```
+
+```{r}
+bike_data <- bike_data |>
+  filter(fn_day == "Yes") |>
+  select(-fn_day)
+```
+
+```{r}
+bike_data <- bike_data |>
+  group_by(date, seasons, holiday) |>
+  summarize(bike_count = sum(bike_count),
+            temp = mean(temp),
+            humidity = mean(humidity),
+            wind_speed = mean(wind_speed),
+            vis = mean(vis),
+            dew_point_temp = mean(dew_point_temp),
+            solar_radiation = mean(solar_radiation),
+            rainfall = sum(rainfall),
+            snowfall = sum(snowfall))|>
+  ungroup()
+```
+
+```{r}
+bike_data
+```
+
+### 
+
+Summary Stats & Graphs
+
+```{r}
+bike_data |>
+  summarize(across('bike_count',
+                   .fns = c("mean "= mean,
+                            "median" = median,
+                            "sd" = sd,
+                            "IQR" = IQR,
+                            "min" = min,
+                            "max" = max),
+                   .names = "{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+  group_by(holiday)|>
+  summarize(across('bike_count',
+                   .fns = c("mean "= mean,
+                            "median" = median,
+                            "sd" = sd,
+                            "IQR" = IQR,
+                            "min" = min,
+                            "max" = max),
+                   .names = "{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+  group_by(seasons)|>
+  summarize(across('bike_count',
+                   .fns = c("mean "= mean,
+                            "median" = median,
+                            "sd" = sd,
+                            "IQR" = IQR,
+                            "min" = min,
+                            "max" = max),
+                   .names = "{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+  group_by(seasons,holiday) |>
+  summarize(across('bike_count',
+                   .fns = c("mean "= mean,
+                            "median" = median,
+                            "sd" = sd,
+                            "IQR" = IQR,
+                            "min" = min,
+                            "max" = max),
+                   .names = "{.col}_{.fn}"))
+```
+
+```{r}
+bike_data |>
+  select(where(is.numeric)) |>
+  cor() |>
+  round(3)
+```
+
+```{r}
+ggplot(bike_data, aes(x = temp, y = bike_count)) +
+  geom_jitter(aes(color = seasons)) +
+  facet_grid(~holiday)
+                
+```
+
+```{r}
+ggplot(bike_data, aes(x = solar_radiation, y = bike_count)) +
+  geom_jitter(aes(color = seasons)) +
+  facet_grid(~holiday)
+```
+
+```{r}
+set.seed(23)
+bike_split <- initial_split(bike_data, prop = 0.75, strata = seasons)
+bike_train <- training(bike_split)
+bike_test <- testing(bike_split)
+bike_10_fold <- vfold_cv(bike_train, 10)
+ 
+```
+
+```{r}
+MLR_rec1 <- recipe(bike_count ~., data = bike_train) |>
+  step_date(date, features = "dow") |>
+  step_mutate(day_type = factor(if_else(date_dow %in% c("Sat", "Sun"), "Weekend", "Weekday"))) |>
+  step_rm(date, date_dow) |>
+  step_dummy(seasons, holiday, day_type) |>
+  step_normalize(all_numeric(), -bike_count)
+```
+
+```{r}
+MLR_rec2 <- MLR_rec1 |>
+  step_interact(terms = ~starts_with("seasons")*starts_with("holiday") +
+                  starts_with("seasons")*temp +
+                  temp*rainfall)
+```
+
+```{r}
+MLR_rec3 <- MLR_rec2 |>
+  step_poly(temp,
+            wind_speed,
+            vis,
+            dew_point_temp,
+            solar_radiation,
+            rainfall,
+            snowfall,
+            degree = 2)
+
+#MLR_rec3
+
+```
+
+```{r}
+MLR_spec <- linear_reg() |>
+  set_engine("lm")
+```
+
+```{r}
+MLR_CV_fit1 <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(MLR_spec) |>
+  fit_resamples(bike_10_fold)
+```
+
+```{r}
+MLR_CV_fit2 <- workflow() |>
+  add_recipe(MLR_rec2) |>
+  add_model(MLR_spec) |>
+  fit_resamples(bike_10_fold)
+```
+
+```{r}
+MLR_CV_fit3 <- workflow() |>
+  add_recipe(MLR_rec3) |>
+  add_model(MLR_spec) |>
+  fit_resamples(bike_10_fold)
+  
+```
+
+```{r}
+rbind(MLR_CV_fit1 |> collect_metrics(),
+      MLR_CV_fit2 |> collect_metrics(),
+      MLR_CV_fit3 |> collect_metrics())
+```
+
+```{r}
+rbind(MLR_CV_fit1 |> collect_metrics() |> filter(.metric == "rmse"),
+      MLR_CV_fit2 |> collect_metrics() |> filter(.metric == "rmse"),
+      MLR_CV_fit3 |> collect_metrics() |> filter(.metric == "rmse")) |>
+  mutate(Model = c("Model1 ", "Model 2", "Model 3")) |>
+  select(Model, mean, n, std_err)
+```
+
+```{r}
+final_fit <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(MLR_spec) |>
+  last_fit(bike_split)
+
+```
+
+```{r}
+final_fit |>
+  collect_metrics()
+```
+
+```{r}
+final_fit |>
+  extract_fit_parsnip() |>
+  tidy()
+```
+
+### LASSO model
+
+\*Create a Model instance with tune()
+
+```{r}
+LASSO_spec <- linear_reg(penalty = tune(), mixture = 1) |>
+  set_engine("glmnet")
+```
+
+-   create a entire workflow
+
+```{r}
+LASSO_wkf <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(LASSO_spec)
+
+LASSO_wkf
+  
+```
+
+\*n Fit the model with tune_grid and grid_regular
+
+```{r}
+LASSO_grid <- LASSO_wkf |>
+  tune_grid(resamples = bike_10_fold,
+            grid = grid_regular(penalty(), levels = 200))
+LASSO_grid
+```
+
+-   
+
+```{r}
+LASSO_grid[1, ".metrics"][[1]]
+```
+
+```{r}
+LASSO_grid |>
+  collect_metrics() |>
+  filter(.metric == "rmse")
+```
+
+-   Pull out the best Model
+
+```{r}
+lowest_rmse <- LASSO_grid |>
+  select_best(metric = "rmse")
+
+lowest_rmse
+```
+
+-   Fit the best LASSO model on training set
+
+```{r}
+LASSO_final <- LASSO_wkf |>
+  finalize_workflow(lowest_rmse) |>
+  fit(bike_train)
+tidy(LASSO_final)
+  
+```
+
+-   Coefficient from LASSO model
+
+```{r}
+# LASSO_final |>
+#   extract_fit_parsnip() |>
+#   tidy()
+
+```
+
+## Regression Tree Model
+
+```{r}
+tree_mod <- decision_tree(tree_depth = tune(),
+                          min_n = tune(),
+                          cost_complexity = tune()) |>
+  set_engine("rpart") |>
+  set_mode("regression")
+
+```
+
+-   Create a workflow
+
+```{r}
+tree_wkf <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(tree_mod)
+
+#tree_wkf
+```
+
+-   Tune regression tree
+
+```{r}
+tree_grid <- grid_regular(cost_complexity(),
+                          tree_depth(range = c(2,10)),
+                          min_n(range = c(5,20)),
+                          levels = 5)
+```
+
+-   Perform cross-validation
+```{r}
+tree_tune <- tree_wkf |>
+  tune_grid(
+    resamples = bike_10_fold,
+    grid = tree_grid,
+    metrics = metric_set(rmse, mae)
+  )
+
+#tree_tune
+```
+
+
+```{r}
+#prep(MLR_rec1) |> bake(new_data = bike_train)
+```
+
+-   Select the best tree Model
+
+```{r}
+best_tree <- tree_tune |> 
+  select_best(metric = "rmse")
+#tree_best_params <- select_best(tree_tune, metric = "rmse")
+best_tree
+
+```
+
+-   Fit best model on Training set
+
+```{r}
+final_tree_wkf <- tree_wkf |>
+  finalize_workflow(best_tree)
+
+# Fit final mode on the training set
+tree_fit <- final_tree_wkf|>
+  fit(data = bike_train)
+```
+Evaluate Model Performance on the Test Set
+
+```{r}
+# Predict on the test set
+tree_test_results <- tree_fit %>%
+  predict(new_data = bike_test) %>%
+  bind_cols(bike_test) %>%
+  metrics(truth = bike_count, estimate = .pred)
+
+tree_test_results
+
+```
+
+
+```{r}
+```
+
+-   Plot the tree
+
+```{r}
+library(rpart.plot)
+
+# # Visualize the regression tree
+# tree_fit %>%
+#   extract_fit_parsnip() %>%
+#   rpart.plot::rpart.plot()
+
+```
+## Tuned Bagged Tree Model
+```{r}
+bagged_tree <- bag_tree(tree_depth = tune(),
+                        min_n = tune()) |>
+  set_engine("rpart") %>%
+  set_mode("regression")
+```
+
+# Fit a bag model
+```{r}
+
+```
+* Workflow
+```{r}
+bag_wkf <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(bagged_tree)
+```
+
+```{r}
+# Tune Bagged Tree
+# Define the tuning grid
+bagged_tree_grid <- grid_regular(
+  tree_depth(range = c(2, 10)),
+  min_n(range = c(5, 20)),
+  levels = 5
+)
+
+
+```
+Cross-Validation for Hyperparameter Tuning
+
+```{r}
+# Select Best Bagged Tree Model
+#best_bagged <- bagged_tune |> select_best(metric = "rmse")
+
+```
+
+
+```{r}
+# Perform cross-validation tuning
+bagged_tree_tune <- bag_wkf |>
+  tune_grid(
+    resamples = bike_10_fold,   # Cross-validation folds
+    grid = bagged_tree_grid,    # Hyperparameter grid
+    metrics = metric_set(rmse, mae)  # Evaluation metrics
+  )
+
+```
+Select the best model
+```{r}
+# Select the best hyperparameters based on RMSE
+best_bagged_tree <- bagged_tree_tune |>
+  select_best(metric = "rmse")
+
+best_bagged_tree
+
+```
+
+Fit the model 
+```{r}
+# Finalize the workflow with the best parameters
+bagged_tree_fit <- bag_wkf |>
+  finalize_workflow(best_bagged_tree) |>
+  fit(data = bike_train)
+
+```
+Evaluate on Test data
+
+```{r}
+# Make predictions on the test set
+bagged_tree_preds <- predict(bagged_tree_fit, new_data = bike_test) |>
+  bind_cols(bike_test)
+
+# Evaluate model performance
+bagged_tree_metrics <- bagged_tree_preds |>
+  metrics(truth = bike_count, estimate = .pred)
+
+bagged_tree_metrics
+
+```
+
+```{r}
+# #install.packages("vip")
+# library(vip)
+# bagged_fit |> 
+#   extract_fit_parsnip() |> 
+#   vip::vip()
+
+```
+
+
+```{r}
+# bag_final_model <- extract_fit_engine(bagged_fit)
+# bag_final_model$imp |>
+#  mutate(term = factor(term, levels = term)) |>
+#  ggplot(aes(x = term, y = value)) +
+#  geom_bar(stat ="identity") +
+#  coord_flip()
+```
+## Random Forest
+
+```{r}
+rf_spec <- rand_forest(
+  mtry = tune(), 
+  trees = 500, 
+  min_n = tune()
+) |> 
+  set_engine("ranger") |> 
+  set_mode("regression")
+```
+
+Workflow
+```{r}
+rf_wkf <- workflow() |>
+  add_recipe(MLR_rec1) |>
+  add_model(rf_spec)
+
+
+```
+
+Hyperparameter Grid
+```{r}
+# Define the Grid for Tuning
+rf_grid <- grid_regular(
+  mtry(range = c(1, ncol(bike_train) - 1)), 
+  min_n(range = c(2, 10)),
+  levels = 5
+)
+
+```
+
+Cross-Validation
+```{r}
+# Tune the Random Forest Model
+rf_tune <- rf_wkf |>
+  tune_grid(
+    resamples = bike_10_fold,
+    grid = rf_grid,
+    metrics = metric_set(rmse, mae)  
+  )
+
+
+```
+
+Best Hyperparameter
+```{r}
+best_rf <- rf_tune |>
+  select_best(metric = "rmse")
+
+# View the Best Parameters
+print(best_rf)
+```
+workflow and fit on Training data 
+
+```{r}
+# Finalize Workflow with Best Parameters
+rf_fit <- rf_wkf |>
+  finalize_workflow(best_rf) |>
+  fit(data = bike_train)
+
+
+```
+Model on the Test Set
+```{r}
+# Make Predictions on Test Set
+rf_preds <- predict(rf_fit, new_data = bike_test) |>
+  bind_cols(bike_test)
+
+# Evaluate Model Performance
+rf_metrics <- rf_preds |>
+  metrics(truth = bike_count, estimate = .pred) # Replace 'Rental_Count' with your target variable
+
+# View the Metrics
+print(rf_metrics)
+
+```
+
+##Model Comparisons on Test Set
+```{r}
+# LASSO model performance
+lasso_preds <- predict(LASSO_final, new_data = bike_test) |>
+  bind_cols(bike_test) |>
+  metrics(truth = bike_count, estimate = .pred)
+```
+
+
+```{r}
+# MLR model performance
+# Extract the workflow from the last_fit result
+final_fit_workflow <- extract_workflow(final_fit)
+
+# Make predictions on the test set using the extracted workflow
+mlr_preds <- predict(final_fit_workflow, new_data = bike_test) |>
+  bind_cols(bike_test) |>
+  metrics(truth = bike_count, estimate = .pred)
+
+mlr_preds
+```
+
+
+```{r}
+# Regression Tree model performance
+tree_preds <- predict(tree_fit, new_data = bike_test) |>
+  bind_cols(bike_test) |>
+  metrics(truth = bike_count, estimate = .pred)
+```
+
+
+```{r}
+# Bagged Tree model performance
+bagged_tree_preds <- predict(bagged_tree_fit, new_data = bike_test) |>
+  bind_cols(bike_test) |>
+  metrics(truth = bike_count, estimate = .pred)
+```
+
+
+```{r}
+# Random Forest model performance
+rf_preds <- predict(rf_fit, new_data = bike_test) |>
+  bind_cols(bike_test) |>
+  metrics(truth = bike_count, estimate = .pred)
+```
+
+
+```{r}
+
+# Combine all metrics
+model_comparison <- bind_rows(
+  lasso_preds |> mutate(Model = "LASSO"),
+  mlr_preds |> mutate(Model = "MLR"),
+  tree_preds |> mutate(Model = "Regression Tree"),
+  bagged_tree_preds |> mutate(Model = "Bagged Tree"),
+  rf_preds |> mutate(Model = "Random Forest")
+)
+model_comparison
+```
+
+
+```{r}
+model_comparison |> 
+  filter(.metric == "rmse") |> 
+  select(Model, .estimate) |> 
+  arrange(.estimate)
+
+```
+
+MLR and LASSO model for final coefficient
+```{r}
+# MLR model final coefficients
+final_fit |>
+  extract_fit_parsnip() |>
+  tidy()
+
+# LASSO model final coefficients
+LASSO_final |>
+  extract_fit_parsnip() |>
+  tidy()
+
+```
+Regression Tree Model: Plot the final fit
+
+```{r}
+# Plot the final regression tree
+# Extract the fitted model from the parsnip workflow
+rpart_model <- tree_fit |>
+  extract_fit_parsnip()
+
+# Plot the regression tree
+
+par(mar = c(5, 4, 4, 2))  
+rpart.plot::rpart.plot(rpart_model$fit, roundint = FALSE)
+
+
+```
+Bagged Tree and Random Forest Models: Produce variable importance plots
+
+```{r}
+# Bagged Tree variable importance plot
+rpart_model <- bagged_tree_fit$fit
+rpart_model$variable.importance  # Variable importance for rpart-based models
+
+```
+
+
+```{r}
+# Random Forest variable importance plot
+#install.packages("workflows")
+# rf_fit %>%
+#   extract_fit_parsnip() %>%
+#   vip::vip()
+
+```
+Best Model, Fit it to the Entire Dataset
+
+```{r}
+# Example: Refit the Random Forest (assuming it was the best based on the test set performance)
+# final_rf_fit <- rf_wkf %>%
+#   finalize_workflow(best_rf) %>%
+#   fit(data = bike_data)
+# 
+# # Check the final model performance on the full dataset
+# final_rf_fit
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
